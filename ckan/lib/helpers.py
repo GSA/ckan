@@ -546,7 +546,7 @@ def default_group_type():
     return str(config.get('ckan.default.group_type', 'group'))
 
 
-def get_facet_items_dict(facet, limit=10, exclude_active=False):
+def get_facet_items_dict(facet, limit=None, exclude_active=False):
     '''Return the list of unselected facet items for the given facet, sorted
     by count.
 
@@ -565,6 +565,11 @@ def get_facet_items_dict(facet, limit=10, exclude_active=False):
     exclude_active -- only return unselected facets.
 
     '''
+    if (limit == None and config.get('search.facets.default') ):       
+       limit = int(config.get('search.facets.default')) 
+    elif(limit == None and not config.get('search.facets.default')):
+       limit = 10
+
     if not c.search_facets or \
             not c.search_facets.get(facet) or \
             not c.search_facets.get(facet).get('items'):
@@ -579,7 +584,8 @@ def get_facet_items_dict(facet, limit=10, exclude_active=False):
             facets.append(dict(active=True, **facet_item))
     facets = sorted(facets, key=lambda item: item['count'], reverse=True)
     if c.search_facets_limits:
-        limit = c.search_facets_limits.get(facet)
+       if(c.search_facets_limits.get(facet) == 0):
+	    limit = c.search_facets_limits.get(facet)
     if limit:
         return facets[:limit]
     else:
