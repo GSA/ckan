@@ -8,6 +8,7 @@ import socket
 
 from pylons import config
 import sqlalchemy
+from paste.deploy.converters import asbool
 
 import ckan.lib.dictization
 import ckan.logic as logic
@@ -21,6 +22,7 @@ import ckan.plugins as plugins
 import ckan.lib.search as search
 import ckan.lib.plugins as lib_plugins
 import ckan.lib.activity_streams as activity_streams
+import ckan.lib.datapreview as datapreview
 import ckan.new_authz as new_authz
 
 from ckan.common import _
@@ -72,12 +74,13 @@ def _activity_stream_get_filtered_users():
     '''
     users = config.get('ckan.hide_activity_from_users')
     if users:
-        user_list = users.split()
+        users_list = users.split()
     else:
         context = {'model': model, 'ignore_auth': True}
         site_user = logic.get_action('get_site_user')(context)
-        users = [site_user.get('name')]
-    return model.User.user_ids_for_name_or_id(users)
+        users_list = [site_user.get('name')]
+
+    return model.User.user_ids_for_name_or_id(users_list)
 
 
 def _package_list_with_resources(context, package_revision_list):
@@ -117,14 +120,13 @@ def package_list(context, data_dict):
 
     _check_access('package_list', context, data_dict)
 
-    package_revision_table = model.package_revision_table
-    col = (package_revision_table.c.id
-           if api == 2 else package_revision_table.c.name)
+    package_table = model.package_table
+    col = (package_table.c.id
+           if api == 2 else package_table.c.name)
     query = _select([col])
     query = query.where(_and_(
-        package_revision_table.c.state == 'active',
-        package_revision_table.c.current == True,
-        package_revision_table.c.private == False,
+        package_table.c.state == 'active',
+        package_table.c.private == False,
     ))
     query = query.order_by(col)
 
@@ -361,9 +363,9 @@ def member_list(context, data_dict=None):
 
 def _group_or_org_list(context, data_dict, is_org=False):
     model = context['model']
-    user = context['user']
     api = context.get('api_version')
     groups = data_dict.get('groups')
+    group_type = data_dict.get('type', 'group')
     ref_group_by = 'id' if api == 2 else 'name'
 
     sort = data_dict.get('sort', 'name')
@@ -378,34 +380,55 @@ def _group_or_org_list(context, data_dict, is_org=False):
             sort = order_by
     # if the sort is packages and no sort direction is supplied we want to do a
     # reverse sort to maintain compatibility.
-    if sort.strip() == 'packages':
-        sort = 'packages desc'
+    if sort.strip() in ('packages', 'package_count'):
+        sort = 'package_count desc'
 
     sort_info = _unpick_search(sort,
-                               allowed_fields=['name', 'packages'],
+                               allowed_fields=['name', 'packages',
+                                               'package_count', 'title'],
                                total=1)
 
     all_fields = data_dict.get('all_fields', None)
+    include_extras = all_fields and \
+                     asbool(data_dict.get('include_extras', False))
 
-    query = model.Session.query(model.Group).join(model.GroupRevision)
-    query = query.filter(model.GroupRevision.state == 'active')
-    query = query.filter(model.GroupRevision.current == True)
+    query = model.Session.query(model.Group)
+    if include_extras:
+        # this does an eager load of the extras, avoiding an sql query every
+        # time group_list_dictize accesses a group's extra.
+        query = query.options(sqlalchemy.orm.joinedload(model.Group._extras))
+    query = query.filter(model.Group.state == 'active')
     if groups:
-        query = query.filter(model.GroupRevision.name.in_(groups))
+        query = query.filter(model.Group.name.in_(groups))
     if q:
         q = u'%{0}%'.format(q)
         query = query.filter(_or_(
-            model.GroupRevision.name.ilike(q),
-            model.GroupRevision.title.ilike(q),
-            model.GroupRevision.description.ilike(q),
+            model.Group.name.ilike(q),
+            model.Group.title.ilike(q),
+            model.Group.description.ilike(q),
         ))
 
-    query = query.filter(model.GroupRevision.is_organization == is_org)
+    query = query.filter(model.Group.is_organization == is_org)
+    if not is_org:
+        query = query.filter(model.Group.type == group_type)
 
     groups = query.all()
-    group_list = model_dictize.group_list_dictize(groups, context,
-                                                  lambda x: x[sort_info[0][0]],
-                                                  sort_info[0][1] == 'desc')
+    if all_fields:
+        include_tags = asbool(data_dict.get('include_tags', False))
+    else:
+        include_tags = False
+    # even if we are not going to return all_fields, we need to dictize all the
+    # groups so that we can sort by any field.
+    group_list = model_dictize.group_list_dictize(
+        groups, context,
+        sort_key=lambda x: x[sort_info[0][0]],
+        reverse=sort_info[0][1] == 'desc',
+        with_package_counts=all_fields or
+        sort_info[0][0] in ('packages', 'package_count'),
+        include_groups=asbool(data_dict.get('include_groups', False)),
+        include_tags=include_tags,
+        include_extras=include_extras,
+        )
 
     if not all_fields:
         group_list = [group[ref_group_by] for group in group_list]
@@ -421,20 +444,32 @@ def group_list(context, data_dict):
     :type order_by: string
     :param sort: sorting of the search results.  Optional.  Default:
         "name asc" string of field name and sort-order. The allowed fields are
-        'name' and 'packages'
+        'name', 'package_count' and 'title'
     :type sort: string
     :param groups: a list of names of the groups to return, if given only
         groups whose names are in this list will be returned (optional)
     :type groups: list of strings
-    :param all_fields: return full group dictionaries instead of  just names
+    :param all_fields: return group dictionaries instead of just names. Only
+        core fields are returned - get some more using the include_* options.
+        Returning a list of packages is too expensive, so the `packages`
+        property for each group is deprecated, but there is a count of the
+        packages in the `package_count` property.
         (optional, default: ``False``)
     :type all_fields: boolean
+    :param include_extras: if all_fields, include the group extra fields
+        (optional, default: ``False``)
+    :type include_extras: boolean
+    :param include_tags: if all_fields, include the group tags
+        (optional, default: ``False``)
+    :type include_tags: boolean
+    :param include_groups: if all_fields, include the groups the groups are in
+        (optional, default: ``False``)
+    :type include_groups: boolean
 
     :rtype: list of strings
 
     '''
     _check_access('group_list', context, data_dict)
-    data_dict['type'] = 'group'
     return _group_or_org_list(context, data_dict)
 
 
@@ -446,13 +481,26 @@ def organization_list(context, data_dict):
     :type order_by: string
     :param sort: sorting of the search results.  Optional.  Default:
         "name asc" string of field name and sort-order. The allowed fields are
-        'name' and 'packages'
+        'name', 'package_count' and 'title'
     :type sort: string
     :param organizations: a list of names of the groups to return,
         if given only groups whose names are in this list will be
         returned (optional)
     :type organizations: list of strings
-    :param all_fields: return full group dictionaries instead of  just names
+    :param all_fields: return group dictionaries instead of just names. Only
+        core fields are returned - get some more using the include_* options.
+        Returning a list of packages is too expensive, so the `packages`
+        property for each group is deprecated, but there is a count of the
+        packages in the `package_count` property.
+        (optional, default: ``False``)
+    :type all_fields: boolean
+    :param include_extras: if all_fields, include the group extra fields
+        (optional, default: ``False``)
+    :type include_extras: boolean
+    :param include_tags: if all_fields, include the group tags
+        (optional, default: ``False``)
+    :type include_tags: boolean
+    :param include_groups: if all_fields, include the groups the groups are in
         (optional, default: ``False``)
     :type all_fields: boolean
 
@@ -501,7 +549,8 @@ def group_list_authz(context, data_dict):
         q = model.Session.query(model.Member) \
             .filter(model.Member.table_name == 'user') \
             .filter(model.Member.capacity.in_(roles)) \
-            .filter(model.Member.table_id == user_id)
+            .filter(model.Member.table_id == user_id) \
+            .filter(model.Member.state == 'active')
         group_ids = []
         for row in q.all():
             group_ids.append(row.group_id)
@@ -528,15 +577,38 @@ def group_list_authz(context, data_dict):
 
 
 def organization_list_for_user(context, data_dict):
-    '''Return the list of organizations that the user is a member of.
+    '''Return the organizations that the user has a given permission for.
+
+    By default this returns the list of organizations that the currently
+    authorized user can edit, i.e. the list of organizations that the user is an
+    admin of.
+
+    Specifically it returns the list of organizations that the currently
+    authorized user has a given permission (for example: "edit_group") against.
+
+    When a user becomes a member of an organization in CKAN they're given a
+    "capacity" (sometimes called a "role"), for example "member", "editor" or
+    "admin".
+
+    Each of these roles has certain permissions associated with it. For example
+    the admin role has the "admin" permission (which means they have permission
+    to do anything). The editor role has permissions like "create_dataset",
+    "update_dataset" and "delete_dataset".  The member role has the "read"
+    permission.
+
+    This function returns the list of organizations that the authorized user has
+    a given permission for. For example the list of organizations that the user
+    is an admin of, or the list of organizations that the user can create
+    datasets in.
 
     :param permission: the permission the user has against the
-        returned organizations (optional, default: ``edit_group``)
+        returned organizations, for example ``"read"`` or ``"create_dataset"``
+        (optional, default: ``"edit_group"``)
     :type permission: string
 
-    :returns: list of dictized organizations that the user is
-        authorized to edit
+    :returns: list of organizations that the user has the given permission for
     :rtype: list of dicts
+
     '''
     model = context['model']
     user = context['user']
@@ -564,7 +636,8 @@ def organization_list_for_user(context, data_dict):
         q = model.Session.query(model.Member) \
             .filter(model.Member.table_name == 'user') \
             .filter(model.Member.capacity.in_(roles)) \
-            .filter(model.Member.table_id == user_id)
+            .filter(model.Member.table_id == user_id) \
+            .filter(model.Member.state == 'active')
 
         group_ids = []
         for row in q.all():
@@ -699,10 +772,13 @@ def user_list(context, data_dict):
       (optional)
     :type q: string
     :param order_by: which field to sort the list by (optional, default:
-      ``'name'``)
+      ``'name'``). Can be any user field or ``edits`` (i.e. number_of_edits).
     :type order_by: string
 
-    :rtype: list of dictionaries
+    :rtype: list of user dictionaries. User properties include:
+      ``number_of_edits`` which counts the revisions by the user and
+      ``number_created_packages`` which excludes datasets which are private
+      or draft state.
 
     '''
     model = context['model']
@@ -724,12 +800,12 @@ def user_list(context, data_dict):
                     model.Revision.author == model.User.name,
                     model.Revision.author == model.User.openid
                 )).label('number_of_edits'),
-        _select([_func.count(model.UserObjectRole.id)],
+        _select([_func.count(model.Package.id)],
                 _and_(
-                    model.UserObjectRole.user_id == model.User.id,
-                    model.UserObjectRole.context == 'Package',
-                    model.UserObjectRole.role == 'admin'
-                )).label('number_administered_packages')
+                    model.Package.creator_user_id == model.User.id,
+                    model.Package.state == 'active',
+                    model.Package.private == False,
+                )).label('number_created_packages')
     )
 
     if q:
@@ -905,10 +981,10 @@ def package_show(context, data_dict):
             schema = context['schema']
         else:
             schema = package_plugin.show_package_schema()
-            if schema and context.get('validate', True):
-                package_dict, errors = lib_plugins.plugin_validate(
-                    package_plugin, context, package_dict, schema,
-                    'package_show')
+        if schema and context.get('validate', True):
+            package_dict, errors = lib_plugins.plugin_validate(
+                package_plugin, context, package_dict, schema,
+                'package_show')
 
     for item in plugins.PluginImplementations(plugins.IPackageController):
         item.after_show(context, package_dict)
@@ -938,21 +1014,75 @@ def resource_show(context, data_dict):
     id = _get_or_bust(data_dict, 'id')
 
     resource = model.Resource.get(id)
-    context['resource'] = resource
+    resource_context = dict(context, resource=resource)
 
     if not resource:
         raise NotFound
 
-    _check_access('resource_show', context, data_dict)
-    resource_dict = model_dictize.resource_dictize(resource, context)
+    _check_access('resource_show', resource_context, data_dict)
 
-    _add_tracking_summary_to_resource_dict(resource_dict, model)
+    pkg_dict = logic.get_action('package_show')(
+        dict(context),
+        {'id': resource.package.id})
 
-    for item in plugins.PluginImplementations(plugins.IResourceController):
-        resource_dict = item.before_show(resource_dict)
+    for resource_dict in pkg_dict['resources']:
+        if resource_dict['id'] == id:
+            break
+    else:
+        log.error('Could not find resource ' + id)
+        raise NotFound(_('Resource was not found.'))
 
     return resource_dict
 
+
+def resource_view_show(context, data_dict):
+    '''
+    Return the metadata of a resource_view.
+
+    :param id: the id of the resource_view
+    :type id: string
+
+    :rtype: dictionary
+    '''
+    model = context['model']
+    id = _get_or_bust(data_dict, 'id')
+
+    resource_view = model.ResourceView.get(id)
+    if not resource_view:
+        _check_access('resource_view_show', context, data_dict)
+        raise NotFound
+
+    context['resource_view'] = resource_view
+    context['resource'] = model.Resource.get(resource_view.resource_id)
+
+    _check_access('resource_view_show', context, data_dict)
+    return model_dictize.resource_view_dictize(resource_view, context)
+
+
+def resource_view_list(context, data_dict):
+    '''
+    Return the list of resource views for a particular resource.
+
+    :param id: the id of the resource
+    :type id: string
+
+    :rtype: list of dictionaries.
+    '''
+    model = context['model']
+    id = _get_or_bust(data_dict, 'id')
+    resource = model.Resource.get(id)
+    if not resource:
+        raise NotFound
+    context['resource'] = resource
+    _check_access('resource_view_list', context, data_dict)
+    q = model.Session.query(model.ResourceView).filter_by(resource_id=id)
+    ## only show views when there is the correct plugin enabled
+    resource_views = [
+        resource_view for resource_view
+        in q.order_by(model.ResourceView.order).all()
+        if datapreview.get_view_plugin(resource_view.view_type)
+    ]
+    return model_dictize.resource_view_list_dictize(resource_views, context)
 
 def resource_status_show(context, data_dict):
     '''Return the statuses of a resource's tasks.
@@ -1018,7 +1148,8 @@ def _group_or_org_show(context, data_dict, is_org=False):
     include_datasets = data_dict.get('include_datasets', True)
     if isinstance(include_datasets, basestring):
         include_datasets = (include_datasets.lower() in ('true', '1'))
-    context['include_datasets'] = include_datasets
+    packages_field = 'datasets' if include_datasets \
+                     else 'none_but_include_package_count'
 
     if group is None:
         raise NotFound
@@ -1032,7 +1163,8 @@ def _group_or_org_show(context, data_dict, is_org=False):
     else:
         _check_access('group_show', context, data_dict)
 
-    group_dict = model_dictize.group_dictize(group, context)
+    group_dict = model_dictize.group_dictize(group, context,
+                                             packages_field=packages_field)
 
     if is_org:
         plugin_type = plugins.IOrganizationController
@@ -1055,10 +1187,11 @@ def _group_or_org_show(context, data_dict, is_org=False):
         {'model': model, 'session': model.Session},
         {'id': group_dict['id']})
 
-    if schema:
-        group_dict, errors = lib_plugins.plugin_validate(
-            group_plugin, context, group_dict, schema,
-            'organization_show' if is_org else 'group_show')
+    if schema is None:
+        schema = logic.schema.default_show_group_schema()
+    group_dict, errors = lib_plugins.plugin_validate(
+        group_plugin, context, group_dict, schema,
+        'organization_show' if is_org else 'group_show')
     return group_dict
 
 
@@ -1106,11 +1239,18 @@ def group_package_show(context, data_dict):
     :rtype: list of dictionaries
 
     '''
+
     model = context['model']
     group_id = _get_or_bust(data_dict, 'id')
 
-    # FIXME: What if limit is not an int? Schema and validation needed.
     limit = data_dict.get('limit')
+    if limit:
+        try:
+            limit = int(data_dict.get('limit'))
+            if limit < 0:
+                raise logic.ValidationError('Limit must be a positive integer')
+        except ValueError:
+            raise logic.ValidationError('Limit must be a positive integer')
 
     group = model.Group.get(group_id)
     context['group'] = group
@@ -1119,13 +1259,12 @@ def group_package_show(context, data_dict):
 
     _check_access('group_show', context, data_dict)
 
-    result = []
-    for pkg_rev in group.packages(
-            limit=limit,
-            return_query=context.get('return_query')):
-        result.append(model_dictize.package_dictize(pkg_rev, context))
+    result = logic.get_action('package_search')(context, {
+        'fq': 'groups:{0}'.format(group.name),
+        'rows': limit,
+    })
 
-    return result
+    return result['results']
 
 
 def tag_show(context, data_dict):
@@ -1161,7 +1300,20 @@ def user_show(context, data_dict):
     :type id: string
     :param user_obj: the user dictionary of the user (optional)
     :type user_obj: user dictionary
+    :param include_datasets: Include a list of datasets the user has created.
+        If it is the same user or a sysadmin requesting, it includes datasets
+        that are draft or private.
+        (optional, default:``False``, limit:50)
+    :type include_datasets: boolean
+    :param include_num_followers: Include the number of followers the user has
+         (optional, default:``False``)
+    :type include_num_followers: boolean
 
+    :returns: the details of the user. Includes email_hash, number_of_edits and
+        number_created_packages (which excludes draft or private datasets
+        unless it is the same user or sysadmin making the request). Excludes
+        the password (hash) and reset_key. If it is the same user or a
+        sysadmin requesting, the email and apikey are included.
     :rtype: dictionary
 
     '''
@@ -1181,39 +1333,51 @@ def user_show(context, data_dict):
 
     _check_access('user_show', context, data_dict)
 
+    # include private and draft datasets?
+    requester = context.get('user')
+    if requester:
+        requester_looking_at_own_account = requester == user_obj.name
+        include_private_and_draft_datasets = \
+            new_authz.is_sysadmin(requester) or \
+            requester_looking_at_own_account
+    else:
+        include_private_and_draft_datasets = False
+    context['count_private_and_draft_datasets'] = \
+        include_private_and_draft_datasets
+
     user_dict = model_dictize.user_dictize(user_obj, context)
 
     if context.get('return_minimal'):
+        log.warning('Use of the "return_minimal" in user_show is '
+                    'deprecated.')
         return user_dict
 
-    revisions_q = model.Session.query(model.Revision).filter_by(
-        author=user_obj.name)
+    if data_dict.get('include_datasets', False):
+        user_dict['datasets'] = []
+        dataset_q = model.Session.query(model.Package) \
+                         .filter_by(creator_user_id=user_dict['id'])
+        if not include_private_and_draft_datasets:
+            dataset_q = dataset_q \
+                .filter_by(state='active') \
+                .filter_by(private=False)
+        else:
+            dataset_q = dataset_q \
+                .filter(model.Package.state != 'deleted')
+        dataset_q = dataset_q.limit(50)
 
-    revisions_list = []
-    for revision in revisions_q.limit(20).all():
-        revision_dict = logic.get_action('revision_show')(
-            context, {'id': revision.id})
-        revision_dict['state'] = revision.state
-        revisions_list.append(revision_dict)
-    user_dict['activity'] = revisions_list
+        for dataset in dataset_q:
+            try:
+                dataset_dict = logic.get_action('package_show')(
+                    context, {'id': dataset.id})
+                del context['package']
+            except logic.NotAuthorized:
+                continue
+            user_dict['datasets'].append(dataset_dict)
 
-    user_dict['datasets'] = []
-    dataset_q = (model.Session.query(model.Package)
-                 .join(model.PackageRole)
-                 .filter_by(user=user_obj, role=model.Role.ADMIN)
-                 .limit(50))
-
-    for dataset in dataset_q:
-        try:
-            dataset_dict = logic.get_action('package_show')(
-                context, {'id': dataset.id})
-        except logic.NotAuthorized:
-            continue
-        user_dict['datasets'].append(dataset_dict)
-
-    user_dict['num_followers'] = logic.get_action('user_follower_count')(
-        {'model': model, 'session': model.Session},
-        {'id': user_dict['id']})
+    if data_dict.get('include_num_followers', False):
+        user_dict['num_followers'] = logic.get_action('user_follower_count')(
+            {'model': model, 'session': model.Session},
+            {'id': user_dict['id']})
 
     return user_dict
 
@@ -1277,11 +1441,11 @@ def package_autocomplete(context, data_dict):
 
     like_q = u"%s%%" % q
 
-    query = model.Session.query(model.PackageRevision)
-    query = query.filter(model.PackageRevision.state == 'active')
-    query = query.filter(model.PackageRevision.current == True)
-    query = query.filter(_or_(model.PackageRevision.name.ilike(like_q),
-                              model.PackageRevision.title.ilike(like_q)))
+    query = model.Session.query(model.Package)
+    query = query.filter(model.Package.state == 'active')
+    query = query.filter(model.Package.private == False)
+    query = query.filter(_or_(model.Package.name.ilike(like_q),
+                              model.Package.title.ilike(like_q)))
     query = query.limit(limit)
 
     q_lower = q.lower()
@@ -1327,14 +1491,13 @@ def format_autocomplete(context, data_dict):
     like_q = u'%' + q + u'%'
 
     query = (session.query(
-        model.ResourceRevision.format,
-        _func.count(model.ResourceRevision.format).label('total'))
+        model.Resource.format,
+        _func.count(model.Resource.format).label('total'))
         .filter(_and_(
-            model.ResourceRevision.state == 'active',
-            model.ResourceRevision.current == True
+            model.Resource.state == 'active',
         ))
-        .filter(model.ResourceRevision.format.ilike(like_q))
-        .group_by(model.ResourceRevision.format)
+        .filter(model.Resource.format.ilike(like_q))
+        .group_by(model.Resource.format)
         .order_by('total DESC')
         .limit(limit))
 
@@ -1543,12 +1706,9 @@ def package_search(context, data_dict):
         for package in query.results:
             # get the package object
             package, package_dict = package['id'], package.get(data_source)
-            pkg_query = session.query(model.PackageRevision)\
-                .filter(model.PackageRevision.id == package)\
-                .filter(_and_(
-                    model.PackageRevision.state == u'active',
-                    model.PackageRevision.current == True
-                ))
+            pkg_query = session.query(model.Package)\
+                .filter(model.Package.id == package)\
+                .filter(model.Package.state == u'active')
             pkg = pkg_query.first()
 
             ## if the index has got a package that is not in ckan then
@@ -1740,12 +1900,11 @@ def resource_search(context, data_dict):
     offset = data_dict.get('offset')
     limit = data_dict.get('limit')
 
-    q = (model.Session.query(model.Resource)
-         .join(model.ResourceGroup)
-         .join(model.Package))
-    q = q.filter(model.Package.state == 'active')
-    q = q.filter(model.Package.private == False)
-    q = q.filter(model.Resource.state == 'active')
+    q = model.Session.query(model.Resource) \
+         .join(model.Package) \
+         .filter(model.Package.state == 'active') \
+         .filter(model.Package.private == False) \
+         .filter(model.Resource.state == 'active') \
 
     resource_fields = model.Resource.get_columns()
     for field, terms in fields.items():
@@ -2035,6 +2194,15 @@ def term_translation_show(context, data_dict):
 
 # Only internal services are allowed to call get_site_user.
 def get_site_user(context, data_dict):
+    '''Return the ckan site user
+
+    :param defer_commit: by default (or if set to false) get_site_user will
+        commit and clean up the current transaction. If set to true, caller
+        is responsible for commiting transaction after get_site_user is
+        called. Leaving open connections can cause cli commands to hang!
+        (optional, default: False)
+    :type defer_commit: boolean
+    '''
     _check_access('get_site_user', context, data_dict)
     model = context['model']
     site_id = config.get('ckan.site_id', 'ckan_site_user')
@@ -2048,8 +2216,8 @@ def get_site_user(context, data_dict):
         user.sysadmin = True
         model.Session.add(user)
         model.Session.flush()
-    if not context.get('defer_commit'):
-        model.repo.commit_and_remove()
+        if not context.get('defer_commit'):
+            model.repo.commit()
 
     return {'name': user.name,
             'apikey': user.apikey}
@@ -2132,6 +2300,8 @@ def vocabulary_list(context, data_dict):
     :rtype: list of dictionaries
 
     '''
+    _check_access('vocabulary_list', context, data_dict)
+
     model = context['model']
     vocabulary_objects = model.Session.query(model.Vocabulary).all()
     return model_dictize.vocabulary_list_dictize(vocabulary_objects, context)
@@ -2146,6 +2316,8 @@ def vocabulary_show(context, data_dict):
     :rtype: dictionary
 
     '''
+    _check_access('vocabulary_show', context, data_dict)
+
     model = context['model']
     vocab_id = data_dict.get('id')
     if not vocab_id:
@@ -2563,6 +2735,18 @@ def group_follower_count(context, data_dict):
         context['model'].UserFollowingGroup)
 
 
+def organization_follower_count(context, data_dict):
+    '''Return the number of followers of an organization.
+
+    :param id: the id or name of the organization
+    :type id: string
+
+    :rtype: int
+
+    '''
+    return group_follower_count(context, data_dict)
+
+
 def _follower_list(context, data_dict, default_schema, FollowerClass):
     schema = context.get('schema', default_schema)
     data_dict, errors = _validate(data_dict, schema, context)
@@ -2629,6 +2813,21 @@ def group_follower_list(context, data_dict):
         ckan.logic.schema.default_follow_group_schema(),
         context['model'].UserFollowingGroup)
 
+
+def organization_follower_list(context, data_dict):
+    '''Return the list of users that are following the given organization.
+
+    :param id: the id or name of the organization
+    :type id: string
+
+    :rtype: list of dictionaries
+
+    '''
+    _check_access('organization_follower_list', context, data_dict)
+    return _follower_list(
+        context, data_dict,
+        ckan.logic.schema.default_follow_group_schema(),
+        context['model'].UserFollowingGroup)
 
 def _am_following(context, data_dict, default_schema, FollowerClass):
     schema = context.get('schema', default_schema)
@@ -2817,7 +3016,8 @@ def followee_list(context, data_dict):
     for followee_list_function, followee_type in (
             (user_followee_list, 'user'),
             (dataset_followee_list, 'dataset'),
-            (group_followee_list, 'group')):
+            (group_followee_list, 'group'),
+            (organization_followee_list, 'organization')):
         dicts = followee_list_function(context, data_dict)
         for d in dicts:
             followee_dicts.append(
@@ -2914,6 +3114,26 @@ def group_followee_list(context, data_dict):
     '''
     _check_access('group_followee_list', context, data_dict)
 
+    return _group_or_org_followee_list(context, data_dict, is_org=False)
+
+
+def organization_followee_list(context, data_dict):
+    '''Return the list of organizations that are followed by the given user.
+
+    :param id: the id or name of the user
+    :type id: string
+
+    :rtype: list of dictionaries
+
+    '''
+
+    _check_access('organization_followee_list', context, data_dict)
+
+    return _group_or_org_followee_list(context, data_dict, is_org=True)
+
+
+def _group_or_org_followee_list(context, data_dict, is_org=False):
+
     if not context.get('skip_validation'):
         schema = context.get('schema',
                              ckan.logic.schema.default_follow_user_schema())
@@ -2928,7 +3148,8 @@ def group_followee_list(context, data_dict):
 
     # Convert the UserFollowingGroup objects to a list of Group objects.
     groups = [model.Group.get(followee.object_id) for followee in followees]
-    groups = [group for group in groups if group is not None]
+    groups = [group for group in groups
+              if group is not None and group.is_organization == is_org]
 
     # Dictize the list of Group objects.
     return [model_dictize.group_dictize(group, context) for group in groups]
@@ -3086,3 +3307,28 @@ def member_roles_list(context, data_dict):
 
     _check_access('member_roles_list', context, data_dict)
     return roles_list
+
+
+def help_show(context, data_dict):
+    '''Return the help string for a particular API action.
+
+    :param name: Action function name (eg `user_create`, `package_search`)
+    :type name: string
+    :returns: The help string for the action function, or None if the function
+              does not have a docstring.
+    :rtype: string
+
+    :raises: :class:`ckan.logic.NotFound`: if the action function doesn't exist
+
+    '''
+
+    function_name = logic.get_or_bust(data_dict, 'name')
+
+    _check_access('help_show', context, data_dict)
+
+    try:
+        function = logic.get_action(function_name)
+    except KeyError:
+        raise NotFound('Action function not found')
+
+    return function.__doc__

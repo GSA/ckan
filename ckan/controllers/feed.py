@@ -33,7 +33,7 @@ import ckan.logic as logic
 from ckan.common import _, g, c, request, response, json
 
 # TODO make the item list configurable
-ITEMS_LIMIT = 20
+ITEMS_LIMIT = 1000
 
 log = logging.getLogger(__name__)
 
@@ -306,12 +306,7 @@ class FeedController(base.BaseController):
                 search_params[param] = value
                 fq += ' %s:"%s"' % (param, value)
 
-        try:
-            page = int(request.params.get('page', 1))
-        except ValueError:
-            base.abort(400, _('"page" parameter must be a positive integer'))
-        if page < 0:
-            base.abort(400, _('"page" parameter must be a positive integer'))
+        page = self._get_page_number(request.params)
 
         limit = ITEMS_LIMIT
         data_dict = {
@@ -377,7 +372,7 @@ class FeedController(base.BaseController):
                 title=pkg.get('title', ''),
                 link=self.base_url + h.url_for(controller='package',
                                                action='read',
-                                               id=pkg['id']),
+                                               id=pkg['name']),
                 description=pkg.get('notes', ''),
                 updated=h.date_str_to_datetime(pkg.get('metadata_modified')),
                 published=h.date_str_to_datetime(pkg.get('metadata_created')),
@@ -456,12 +451,7 @@ class FeedController(base.BaseController):
         Returns the constructed search-query dict, and the valid URL
         query parameters.
         """
-        try:
-            page = int(request.params.get('page', 1)) or 1
-        except ValueError:
-            base.abort(400, _('"page" parameter must be a positive integer'))
-        if page < 0:
-            base.abort(400, _('"page" parameter must be a positive integer'))
+        page = self._get_page_number(request.params)
 
         limit = ITEMS_LIMIT
         data_dict = {

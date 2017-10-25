@@ -18,7 +18,7 @@ an existing feature) should be missing from the docs** (but see `todo`_).
 
 .. seealso::
 
-   Jacob Kaplon-Moss's `Writing Great Documentation <http://jacobian.org/writing/great-documentation/>`_
+   Jacob Kaplan-Moss's `Writing Great Documentation <http://jacobian.org/writing/great-documentation/>`_
      A series of blog posts about writing technical docs, a lot of our
      guidelines were based on this.
 
@@ -76,22 +76,9 @@ terminal:
     virtualenv --no-site-packages pyenv
     . pyenv/bin/activate
     pip install -e 'git+https://github.com/ckan/ckan.git#egg=ckan'
-    pip install -r pyenv/src/ckan/dev-requirements.txt
-
-
-Fetch CKAN's git submodules
-===========================
-
-CKAN's custom Sphinx theme is a kept in a git *submodule*, so before you can
-build the docs you have to run these commands in a terminal to download the
-submodule::
-
-    cd pyenv/src/ckan
-    git submodule init
-    git submodule update
-
-You may occasionally have to run ``git submodule update`` again, when someone
-updates the theme, but this doesn't happen often.
+    cd pyenv/src/ckan/
+    pip install -r dev-requirements.txt
+    pip install -r requirements.txt
 
 
 Build the docs
@@ -103,16 +90,16 @@ virtual environment is activated, and then run this command::
     python setup.py build_sphinx
 
 Now you can open the built HTML files in
-``pyenv/src/ckan/build/sphinx/html``, e.g.::
+``build/sphinx/html``, e.g.::
 
-    firefox pyenv/src/ckan/build/sphinx/html/index.html
+    firefox build/sphinx/html/index.html
 
 
 Edit the reStructuredText files
 ===============================
 
 To make changes to the documentation, use a text editor to edit the ``.rst``
-files in ``pyenv/src/ckan/doc/``. Save your changes and then build the docs
+files in ``doc/``. Save your changes and then build the docs
 again (``python setup.py build_sphinx``) and open the HTML files in a web
 browser to preview your changes.
 

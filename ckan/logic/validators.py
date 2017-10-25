@@ -1,3 +1,4 @@
+import collections
 import datetime
 from itertools import count
 import re
@@ -33,13 +34,9 @@ def owner_org_validator(key, data, errors, context):
     model = context['model']
     user = context['user']
     user = model.User.get(user)
-    if value == '' :
+    if value == '':
         if not new_authz.check_config_permission('create_unowned_dataset'):
             raise Invalid(_('A organization must be supplied'))
-        package = context.get('package')
-        # only sysadmins can remove datasets from org
-        if package and package.owner_org and not user.sysadmin:
-            raise Invalid(_('You cannot remove a dataset from an existing organization'))
         return
 
     group = model.Group.get(value)
@@ -62,14 +59,34 @@ def package_id_not_changed(value, context):
     return value
 
 def int_validator(value, context):
-    if isinstance(value, int):
-        return value
+    '''
+    Return an integer for value, which may be a string in base 10 or
+    a numeric type (e.g. int, long, float, Decimal, Fraction). Return
+    None for None or empty/all-whitespace string values.
+
+    :raises: ckan.lib.navl.dictization_functions.Invalid for other
+        inputs or non-whole values
+    '''
+    if value is None:
+        return None
+    if hasattr(value, 'strip') and not value.strip():
+        return None
+
     try:
-        if value.strip() == '':
-            return None
-        return int(value)
-    except (AttributeError, ValueError), e:
-        raise Invalid(_('Invalid integer'))
+        whole, part = divmod(value, 1)
+    except TypeError:
+        try:
+            return int(value)
+        except ValueError:
+            pass
+    else:
+        if not part:
+            try:
+                return int(whole)
+            except TypeError:
+                pass  # complex number: fail like int(complex) does
+
+    raise Invalid(_('Invalid integer'))
 
 def natural_number_validator(value, context):
     value = int_validator(value, context)
@@ -120,6 +137,16 @@ def package_id_exists(value, context):
         raise Invalid('%s: %s' % (_('Not found'), _('Dataset')))
     return value
 
+def package_id_does_not_exist(value, context):
+
+    model = context['model']
+    session = context['session']
+
+    result = session.query(model.Package).get(value)
+    if result:
+        raise Invalid(_('Dataset id already exists'))
+    return value
+
 def package_name_exists(value, context):
 
     model = context['model']
@@ -153,11 +180,20 @@ def package_id_or_name_exists(package_id_or_name, context):
 
     return package_id_or_name
 
+
+def resource_id_exists(value, context):
+    model = context['model']
+    session = context['session']
+    if not session.query(model.Resource).get(value):
+        raise Invalid('%s: %s' % (_('Not found'), _('Resource')))
+    return value
+
+
 def user_id_exists(user_id, context):
-    """Raises Invalid if the given user_id does not exist in the model given
+    '''Raises Invalid if the given user_id does not exist in the model given
     in the context, otherwise returns the given user_id.
 
-    """
+    '''
     model = context['model']
     session = context['session']
 
@@ -184,10 +220,10 @@ def user_id_or_name_exists(user_id_or_name, context):
     return user_id_or_name
 
 def group_id_exists(group_id, context):
-    """Raises Invalid if the given group_id does not exist in the model given
+    '''Raises Invalid if the given group_id does not exist in the model given
     in the context, otherwise returns the given group_id.
 
-    """
+    '''
     model = context['model']
     session = context['session']
 
@@ -198,10 +234,10 @@ def group_id_exists(group_id, context):
 
 
 def related_id_exists(related_id, context):
-    """Raises Invalid if the given related_id does not exist in the model
+    '''Raises Invalid if the given related_id does not exist in the model
     given in the context, otherwise returns the given related_id.
 
-    """
+    '''
     model = context['model']
     session = context['session']
 
@@ -211,9 +247,9 @@ def related_id_exists(related_id, context):
     return related_id
 
 def group_id_or_name_exists(reference, context):
-    """
+    '''
     Raises Invalid if a group identified by the name or id cannot be found.
-    """
+    '''
     model = context['model']
     result = model.Group.get(reference)
     if not result:
@@ -221,13 +257,13 @@ def group_id_or_name_exists(reference, context):
     return reference
 
 def activity_type_exists(activity_type):
-    """Raises Invalid if there is no registered activity renderer for the
+    '''Raises Invalid if there is no registered activity renderer for the
     given activity_type. Otherwise returns the given activity_type.
 
     This just uses object_id_validators as a lookup.
     very safe.
 
-    """
+    '''
     if activity_type in object_id_validators:
         return activity_type
     else:
@@ -266,7 +302,7 @@ object_id_validators = {
     }
 
 def object_id_validator(key, activity_dict, errors, context):
-    """Validate the 'object_id' value of an activity_dict.
+    '''Validate the 'object_id' value of an activity_dict.
 
     Uses the object_id_validators dict (above) to find and call an 'object_id'
     validator function for the given activity_dict's 'activity_type' value.
@@ -278,7 +314,7 @@ def object_id_validator(key, activity_dict, errors, context):
     Raises Invalid if there is no object_id_validator for the activity_dict's
     'activity_type' value.
 
-    """
+    '''
     activity_type = activity_dict[('activity_type',)]
     if object_id_validators.has_key(activity_type):
         object_id = activity_dict[('object_id',)]
@@ -286,11 +322,6 @@ def object_id_validator(key, activity_dict, errors, context):
     else:
         raise Invalid('There is no object_id validator for '
             'activity type "%s"' % activity_type)
-
-def extras_unicode_convert(extras, context):
-    for extra in extras:
-        extras[extra] = unicode(extras[extra])
-    return extras
 
 name_match = re.compile('[a-z0-9_\-]*$')
 def name_validator(value, context):
@@ -318,25 +349,25 @@ def name_validator(value, context):
         raise Invalid(_('That name cannot be used'))
 
     if len(value) < 2:
-        raise Invalid(_('Name must be at least %s characters long') % 2)
+        raise Invalid(_('Must be at least %s characters long') % 2)
     if len(value) > PACKAGE_NAME_MAX_LENGTH:
         raise Invalid(_('Name must be a maximum of %i characters long') % \
                       PACKAGE_NAME_MAX_LENGTH)
     if not name_match.match(value):
-        raise Invalid(_('Url must be purely lowercase alphanumeric '
+        raise Invalid(_('Must be purely lowercase alphanumeric '
                         '(ascii) characters and these symbols: -_'))
     return value
 
 def package_name_validator(key, data, errors, context):
-    model = context["model"]
-    session = context["session"]
-    package = context.get("package")
+    model = context['model']
+    session = context['session']
+    package = context.get('package')
 
     query = session.query(model.Package.name).filter_by(name=data[key])
     if package:
         package_id = package.id
     else:
-        package_id = data.get(key[:-1] + ("id",))
+        package_id = data.get(key[:-1] + ('id',))
     if package_id and package_id is not missing:
         query = query.filter(model.Package.id <> package_id)
     result = query.first()
@@ -656,7 +687,7 @@ def tag_not_in_vocabulary(key, tag_dict, errors, context):
         return
 
 def url_validator(key, data, errors, context):
-    """ Checks that the provided value (if it is present) is a valid URL """
+    ''' Checks that the provided value (if it is present) is a valid URL '''
     import urlparse
     import string
 
@@ -760,3 +791,52 @@ def no_loops_in_hierarchy(key, data, errors, context):
             raise Invalid(_('This parent would create a loop in the '
                             'hierarchy'))
 
+
+def filter_fields_and_values_should_have_same_length(key, data, errors, context):
+    convert_to_list_if_string = logic.converters.convert_to_list_if_string
+    fields = convert_to_list_if_string(data.get(('filter_fields',), []))
+    values = convert_to_list_if_string(data.get(('filter_values',), []))
+
+    if len(fields) != len(values):
+        msg = _('"filter_fields" and "filter_values" should have the same length')
+        errors[('filter_fields',)].append(msg)
+        errors[('filter_values',)].append(msg)
+
+
+def filter_fields_and_values_exist_and_are_valid(key, data, errors, context):
+    convert_to_list_if_string = logic.converters.convert_to_list_if_string
+    fields = convert_to_list_if_string(data.get(('filter_fields',)))
+    values = convert_to_list_if_string(data.get(('filter_values',)))
+
+    if not fields:
+        errors[('filter_fields',)].append(_('"filter_fields" is required when '
+                                            '"filter_values" is filled'))
+    if not values:
+        errors[('filter_values',)].append(_('"filter_values" is required when '
+                                            '"filter_fields" is filled'))
+
+    filters = collections.defaultdict(list)
+    for field, value in zip(fields, values):
+        filters[field].append(value)
+
+    data[('filters',)] = dict(filters)
+
+
+def extra_key_not_in_root_schema(key, data, errors, context):
+
+    for schema_key in context.get('schema_keys', []):
+        if schema_key == data[key] and schema_key not in ['tags']:
+            raise Invalid(_('There is a schema field with the same name'))
+
+
+def empty_if_not_sysadmin(key, data, errors, context):
+    '''Only sysadmins may pass this value'''
+    from ckan.lib.navl.validators import empty
+
+    user = context.get('user')
+
+    ignore_auth = context.get('ignore_auth')
+    if ignore_auth or (user and new_authz.is_sysadmin(user)):
+        return
+
+    empty(key, data, errors, context)

@@ -65,6 +65,10 @@ def use_plugin(*plugins):
         unload(*plugins)
 
 
+# THIS IS PURE EVIL
+# We are changing the default inherit from False to True
+implements.__defaults__ = (None, True, True)
+
 class PluginNotFoundException(Exception):
     '''
     Raised when a requested plugin cannot be found.
@@ -138,7 +142,6 @@ def load(*plugins):
     '''
     Load named plugin(s).
     '''
-
     output = []
 
     observers = PluginImplementations(interfaces.IPluginObserver)

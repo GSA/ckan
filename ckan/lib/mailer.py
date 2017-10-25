@@ -23,8 +23,7 @@ class MailerException(Exception):
 
 def add_msg_niceties(recipient_name, body, sender_name, sender_url):
     return _(u"Dear %s,") % recipient_name \
-           + u"\r\n\r\n%s\r\n\r\n" % body \
-           + u"--\r\n%s (%s)" % (sender_name, sender_url)
+           + u"\r\n\r\n%s\r\n\r\n" % body
 
 def _mail_recipient(recipient_name, recipient_email,
         sender_name, sender_url, subject,
@@ -92,7 +91,7 @@ def _mail_recipient(recipient_name, recipient_email,
 def mail_recipient(recipient_name, recipient_email, subject,
         body, headers={}):
     return _mail_recipient(recipient_name, recipient_email,
-            g.site_title, g.site_url, subject, body, headers=headers)
+            '', '', subject, body, headers=headers)
 
 def mail_user(recipient, subject, body, headers={}):
     if (recipient.email is None) or not len(recipient.email):
@@ -148,7 +147,7 @@ def send_reset_link(user):
 def send_invite(user):
     create_reset_key(user)
     body = get_invite_body(user)
-    subject = _('Invite for {site_title}'.format(site_title=g.site_title))
+    subject = _('Invite for {site_title}').format(site_title=g.site_title)
     mail_user(user, subject, body)
 
 def create_reset_key(user):

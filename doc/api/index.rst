@@ -91,7 +91,7 @@ The response from CKAN will look like this::
 
 The response is a JSON dictionary with three keys:
 
-1. ``"sucess"``: ``true`` or ``false``.
+1. ``"success"``: ``true`` or ``false``.
 
    The API aims to always return ``200 OK`` as the status code of its HTTP
    response, whether there were errors with the request or not, so it's
@@ -206,6 +206,7 @@ to import datasets into CKAN.
     created_package = response_dict['result']
     pprint.pprint(created_package)
 
+For more examples, see :ref:`api-examples`.
 
 
 
@@ -315,6 +316,25 @@ http://demo.ckan.org/api/3/action/package_show?id=adur_district_spending&callbac
 
 .. todo :: This doesn't work with all functions.
 
+
+.. _api-examples:
+
+------------
+API Examples
+------------
+
+
+Uploading a new version of a resource file
+==========================================
+
+You can use the ``upload`` parameter of the
+:py:func:`~ckan.logic.action.update.resource_update` function to upload a
+new version of a resource file. This requires a ``multipart/form-data``
+request, with httpie you can do this using the ``@file.csv``::
+
+    http --json POST http://demo.ckan.org/api/3/action/resource_update id=<resource id> upload=@updated_file.csv Authorization:<api key>
+
+
 .. _api-reference:
 
 --------------------
@@ -359,6 +379,14 @@ ckan.logic.action.update
 ========================
 
 .. automodule:: ckan.logic.action.update
+   :members:
+
+ckan.logic.action.patch
+=======================
+
+.. versionadded:: 2.3
+
+.. automodule:: ckan.logic.action.patch
    :members:
 
 ckan.logic.action.delete

@@ -11,6 +11,7 @@ import logging
 import re
 import os
 import urllib
+import urlparse
 import pprint
 import copy
 import urlparse
@@ -144,22 +145,54 @@ def url_for(*args, **kw):
 
 
 def url_for_static(*args, **kw):
-    '''Create url for static content that does not get translated
-    eg css, js
-    wrapper for routes.url_for'''
+    '''Returns the URL for static content that doesn't get translated (eg CSS)
 
+    It'll raise CkanUrlException if called with an external URL
+
+    This is a wrapper for :py:func:`routes.url_for`
+    '''
+    if args:
+        url = urlparse.urlparse(args[0])
+        url_is_external = (url.scheme != '' or url.netloc != '')
+        if url_is_external:
+            CkanUrlException = ckan.exceptions.CkanUrlException
+            raise CkanUrlException('External URL passed to url_for_static()')
+    return url_for_static_or_external(*args, **kw)
+
+
+def url_for_static_or_external(*args, **kw):
+    '''Returns the URL for static content that doesn't get translated (eg CSS),
+    or external URLs
+
+    This is a wrapper for :py:func:`routes.url_for`
+    '''
     def fix_arg(arg):
-        # make sure that if we specify the url that it is not unicode and
-        # starts with a /
-        arg = str(arg)
-        if not arg.startswith('/'):
-            arg = '/' + arg
-        return arg
+        url = urlparse.urlparse(str(arg))
+        url_is_relative = (url.scheme == '' and url.netloc == '' and
+                           not url.path.startswith('/'))
+        if url_is_relative:
+            return '/' + url.geturl()
+        return url.geturl()
 
     if args:
         args = (fix_arg(args[0]), ) + args[1:]
     my_url = _routes_default_url_for(*args, **kw)
     return my_url
+
+
+def is_url(*args, **kw):
+    '''
+    Returns True if argument parses as a http, https or ftp URL
+    '''
+    if not args:
+        return False
+    try:
+        url = urlparse.urlparse(args[0])
+    except ValueError:
+        return False
+
+    valid_schemes = ('http', 'https', 'ftp')
+    return url.scheme in valid_schemes
 
 
 def _add_i18n_to_url(url_to_amend, **kw):
@@ -546,7 +579,7 @@ def default_group_type():
     return str(config.get('ckan.default.group_type', 'group'))
 
 
-def get_facet_items_dict(facet, limit=10, exclude_active=False):
+def get_facet_items_dict(facet, limit=None, exclude_active=False):
     '''Return the list of unselected facet items for the given facet, sorted
     by count.
 
@@ -565,10 +598,16 @@ def get_facet_items_dict(facet, limit=10, exclude_active=False):
     exclude_active -- only return unselected facets.
 
     '''
-    if not c.search_facets or \
-            not c.search_facets.get(facet) or \
-            not c.search_facets.get(facet).get('items'):
+
+    if (limit == None):
+       limit = int(config.get('search.facets.default'))
+
+    if not c.search_facets or not c.search_facets.get(facet):
         return []
+    if not c.search_facets.get(facet).get('items'):
+        # need a fake facet_item for metadata_type
+        if facet != 'metadata_type':
+            return []
     facets = []
     for facet_item in c.search_facets.get(facet)['items']:
         if not len(facet_item['name'].strip()):
@@ -577,13 +616,70 @@ def get_facet_items_dict(facet, limit=10, exclude_active=False):
             facets.append(dict(active=False, **facet_item))
         elif not exclude_active:
             facets.append(dict(active=True, **facet_item))
+        # need a fake facet_item for metadata_type
+        if facet == 'metadata_type' and facet_item['name'] == 'geospatial':
+            added_facet_item = {
+                'name': u'non-geospatial',
+                'display_name': u'non-geospatial',
+                'count': c.page.item_count - facet_item['count']
+            }
+            if added_facet_item['count'] == 0:
+                continue
+            if not (facet, added_facet_item['name']) in request.params.items():
+                facets.append(dict(active=False, **added_facet_item))
+            elif not exclude_active:
+                facets.append(dict(active=True, **added_facet_item))
+    # need a fake facet_item for metadata_type
+    if facet == 'metadata_type' and facets == []:
+        added_facet_item = {
+            'name': u'non-geospatial',
+            'display_name': u'non-geospatial',
+            'count': c.page.item_count
+        }
+        if added_facet_item['count'] != 0:
+            if not (facet, added_facet_item['name']) in request.params.items():
+                facets.append(dict(active=False, **added_facet_item))
+            elif not exclude_active:
+                facets.append(dict(active=True, **added_facet_item))
+
     facets = sorted(facets, key=lambda item: item['count'], reverse=True)
-    if c.search_facets_limits:
-        limit = c.search_facets_limits.get(facet)
-    if limit:
+    if c.search_facets_limits and limit is None and \
+            c.search_facets_limits.get(facet) == 0:
+        limit = 0
+    # zero treated as infinite for hysterical raisins
+    if limit is not None and limit > 0:
         return facets[:limit]
-    else:
-        return facets
+    return facets
+
+
+def has_more_facets(facet, limit=None, exclude_active=False):
+    '''
+    Returns True if there are more facet items for the given facet than the
+    limit.
+
+    Reads the complete list of facet items for the given facet from
+    c.search_facets, and filters out the facet items that the user has already
+    selected.
+
+    Arguments:
+    facet -- the name of the facet to filter.
+    limit -- the max. number of facet items.
+    exclude_active -- only return unselected facets.
+
+    '''
+    facets = []
+    for facet_item in c.search_facets.get(facet)['items']:
+        if not len(facet_item['name'].strip()):
+            continue
+        if not (facet, facet_item['name']) in request.params.items():
+            facets.append(dict(active=False, **facet_item))
+        elif not exclude_active:
+            facets.append(dict(active=True, **facet_item))
+    if c.search_facets_limits and limit is None:
+        limit = c.search_facets_limits.get(facet)
+    if limit is not None and len(facets) > limit:
+        return True
+    return False
 
 
 def unselected_facet_items(facet, limit=10):
@@ -664,7 +760,7 @@ def sorted_extras(package_extras, auto_clean=False, subs=None, exclude=None):
         if extra.get('state') == 'deleted':
             continue
         k, v = extra['key'], extra['value']
-        if k in exclude:
+        if k in exclude or k.startswith('__'):
             continue
         if subs and k in subs:
             k = subs[k]
@@ -690,8 +786,12 @@ def check_access(action, data_dict=None):
     return authorized
 
 
+@maintain.deprecated("helpers.get_action() is deprecated and will be removed "
+                     "in a future version of CKAN. Instead, please use the "
+                     "extra_vars param to render() in your controller to pass "
+                     "results from action functions to your templates.")
 def get_action(action_name, data_dict=None):
-    '''Calls an action function from a template.'''
+    '''Calls an action function from a template. Deprecated in CKAN 2.3.'''
     if data_dict is None:
         data_dict = {}
     return logic.get_action(action_name)({}, data_dict)
@@ -788,7 +888,7 @@ def dict_list_reduce(list_, key, unique=True):
 def linked_gravatar(email_hash, size=100, default=None):
     return literal(
         '<a href="https://gravatar.com/" target="_blank" ' +
-        'title="%s">' % _('Update your avatar at gravatar.com') +
+        'title="%s" alt="">' % _('Update your avatar at gravatar.com') +
         '%s</a>' % gravatar(email_hash, size, default)
     )
 
@@ -1430,7 +1530,8 @@ def dashboard_activity_stream(user_id, filter_type=None, filter_id=None,
         action_functions = {
             'dataset': 'package_activity_list_html',
             'user': 'user_activity_list_html',
-            'group': 'group_activity_list_html'
+            'group': 'group_activity_list_html',
+            'organization': 'organization_activity_list_html',
         }
         action_function = logic.get_action(action_functions.get(filter_type))
         return action_function(context, {'id': filter_id, 'offset': offset})
@@ -1502,8 +1603,11 @@ RE_MD_INTERNAL_LINK = re.compile(
 )
 
 # find external links eg http://foo.com, https://bar.org/foobar.html
+# but ignore trailing punctuation since it is probably not part of the link
 RE_MD_EXTERNAL_LINK = re.compile(
-    r'(\bhttps?:\/\/[\w\-\.,@?^=%&;:\/~\\+#]*)',
+    r'(\bhttps?:\/\/[\w\-\.,@?^=%&;:\/~\\+#]*'
+     '[\w\-@?^=%&:\/~\\+#]' # but last character can't be punctuation [.,;]
+     ')',
     flags=re.UNICODE
 )
 
@@ -1548,12 +1652,23 @@ def html_auto_link(data):
     return data
 
 
-def render_markdown(data, auto_link=True):
-    ''' returns the data as rendered markdown '''
+def render_markdown(data, auto_link=True, allow_html=False):
+    ''' Returns the data as rendered markdown
+
+    :param auto_link: Should ckan specific links be created e.g. `group:xxx`
+    :type auto_link: bool
+    :param allow_html: If True then html entities in the markdown data.
+        This is dangerous if users have added malicious content.
+        If False all html tags are removed.
+    :type allow_html: bool
+    '''
     if not data:
         return ''
-    data = RE_MD_HTML_TAGS.sub('', data.strip())
-    data = markdown(data, safe_mode=True)
+    if allow_html:
+        data = markdown(data.strip(), safe_mode=False)
+    else:
+        data = RE_MD_HTML_TAGS.sub('', data.strip())
+        data = markdown(data, safe_mode=True)
     # tags can be added by tag:... or tag:"...." and a link will be made
     # from it
     if auto_link:
@@ -1602,13 +1717,11 @@ def resource_preview(resource, package):
 
     Depending on the type, different previews are loaded.
     This could be an img tag where the image is loaded directly or an iframe
-    that embeds a web page, recline or a pdf preview.
+    that embeds a web page or a recline preview.
     '''
 
     if not resource['url']:
-        return snippet("dataviewer/snippets/no_preview.html",
-                       resource_type=format_lower,
-                       reason=_(u'The resource url is not specified.'))
+        return False
 
     format_lower = datapreview.res_format(resource)
     directly = False
@@ -1617,29 +1730,113 @@ def resource_preview(resource, package):
     if datapreview.get_preview_plugin(data_dict, return_first=True):
         url = url_for(controller='package', action='resource_datapreview',
                       resource_id=resource['id'], id=package['id'], qualified=True)
-    elif format_lower in datapreview.direct():
-        directly = True
-        url = resource['url']
-    elif format_lower in datapreview.loadable():
-        url = resource['url']
     else:
-        reason = None
-        if format_lower:
-            log.info(
-                _(u'No preview handler for resource of type {0}'.format(
-                    format_lower))
-            )
-        else:
-            reason = _(u'The resource format is not specified.')
-        return snippet("dataviewer/snippets/no_preview.html",
-                       reason=reason,
-                       resource_type=format_lower)
+        return False
 
     return snippet("dataviewer/snippets/data_preview.html",
                    embed=directly,
                    resource_url=url,
                    raw_resource_url=resource.get('url'))
 
+
+def get_allowed_view_types(resource, package):
+    data_dict = {'resource': resource, 'package': package}
+    plugins = datapreview.get_allowed_view_plugins(data_dict)
+
+    allowed_view_types = []
+    for plugin in plugins:
+        info = plugin.info()
+        allowed_view_types.append((info['name'],
+                                   info.get('title', info['name']),
+                                   info.get('icon', 'image')))
+    allowed_view_types.sort(key=lambda item: item[1])
+    return allowed_view_types
+
+
+def rendered_resource_view(resource_view, resource, package, embed=False):
+    '''
+    Returns a rendered resource view snippet.
+    '''
+    view_plugin = datapreview.get_view_plugin(resource_view['view_type'])
+    context = {}
+    data_dict = {'resource_view': resource_view,
+                 'resource': resource,
+                 'package': package}
+    vars = view_plugin.setup_template_variables(context, data_dict) or {}
+    template = view_plugin.view_template(context, data_dict)
+    data_dict.update(vars)
+
+    if not resource_view_is_iframed(resource_view) and embed:
+        template = "package/snippets/resource_view_embed.html"
+
+    import ckan.lib.base as base
+    return literal(base.render(template, extra_vars=data_dict))
+
+
+def view_resource_url(resource_view, resource, package, **kw):
+    '''
+    Returns url for resource. made to be overridden by extensions. i.e
+    by resource proxy.
+    '''
+    return resource['url']
+
+
+def resource_view_is_filterable(resource_view):
+    '''
+    Returns True if the given resource view support filters.
+    '''
+    view_plugin = datapreview.get_view_plugin(resource_view['view_type'])
+    return view_plugin.info().get('filterable', False)
+
+
+def resource_view_get_fields(resource):
+    '''Returns sorted list of text and time fields of a datastore resource.'''
+
+    if not resource.get('datastore_active'):
+        return []
+
+    data = {
+        'resource_id': resource['id'],
+        'limit': 0
+    }
+    result = logic.get_action('datastore_search')({}, data)
+
+    fields = [field['id'] for field in result.get('fields', [])]
+
+    return sorted(fields)
+
+
+def resource_view_is_iframed(resource_view):
+    '''
+    Returns true if the given resource view should be displayed in an iframe.
+    '''
+    view_plugin = datapreview.get_view_plugin(resource_view['view_type'])
+    return view_plugin.info().get('iframed', True)
+
+def resource_view_icon(resource_view):
+    '''
+    Returns the icon for a particular view type.
+    '''
+    view_plugin = datapreview.get_view_plugin(resource_view['view_type'])
+    return view_plugin.info().get('icon', 'picture')
+
+def resource_view_display_preview(resource_view):
+    '''
+    Returns if the view should display a preview.
+    '''
+    view_plugin = datapreview.get_view_plugin(resource_view['view_type'])
+    return view_plugin.info().get('preview_enabled', True)
+
+def resource_view_full_page(resource_view):
+    '''
+    Returns if the edit view page should be full page.
+    '''
+    view_plugin = datapreview.get_view_plugin(resource_view['view_type'])
+    return view_plugin.info().get('full_page_edit', False)
+
+def remove_linebreaks(string):
+    '''Remove linebreaks from string to make it usable in JavaScript'''
+    return str(string).replace('\n', '')
 
 def list_dict_filter(list_, search_field, output_field, value):
     ''' Takes a list of dicts and returns the value of a given key if the
@@ -1822,6 +2019,15 @@ def unified_resource_format(format):
 def check_config_permission(permission):
     return new_authz.check_config_permission(permission)
 
+
+def get_organization(org=None, include_datasets=False):
+    if org is None:
+        return {}
+    try:
+        return logic.get_action('organization_show')({}, {'id': org, 'include_datasets': include_datasets})
+    except (NotFound, ValidationError, NotAuthorized):
+        return {}
+
 # these are the functions that will end up in `h` template helpers
 __allowed_functions__ = [
     # functions defined in ckan.lib.helpers
@@ -1829,6 +2035,8 @@ __allowed_functions__ = [
     'url',
     'url_for',
     'url_for_static',
+    'url_for_static_or_external',
+    'is_url',
     'lang',
     'flash',
     'flash_error',
@@ -1900,6 +2108,14 @@ __allowed_functions__ = [
     'render_markdown',
     'format_resource_items',
     'resource_preview',
+    'rendered_resource_view',
+    'resource_view_get_fields',
+    'resource_view_is_filterable',
+    'resource_view_is_iframed',
+    'resource_view_icon',
+    'resource_view_display_preview',
+    'resource_view_full_page',
+    'remove_linebreaks',
     'SI_number_span',
     'localised_number',
     'localised_SI_number',
@@ -1908,6 +2124,8 @@ __allowed_functions__ = [
     'list_dict_filter',
     'new_activities',
     'time_ago_from_timestamp',
+    'get_organization',
+    'has_more_facets',
     # imported into ckan.lib.helpers
     'literal',
     'link_to',
@@ -1923,5 +2141,8 @@ __allowed_functions__ = [
     'get_featured_organizations',
     'get_featured_groups',
     'get_site_statistics',
+    'get_allowed_view_types',
+    'urlencode',
     'check_config_permission',
+    'view_resource_url',
 ]

@@ -49,6 +49,17 @@ examples below, this option can be given as ``-c`` for short.
 to execute. Most commands have their own subcommands and options. For example,
 to print out a list of all of your CKAN site's users do:
 
+.. note::
+
+  You may also specify the location of your config file using the CKAN_INI
+  environment variable. You will no longer need to use --config= or -c= to
+  tell paster where the config file is:
+
+  .. parsed-literal::
+
+     export CKAN_INI=\ |development.ini|
+
+
 .. parsed-literal::
 
    paster user list -c |development.ini|
@@ -73,6 +84,15 @@ with the ``--help`` option::
 -------------------------------
 Troubleshooting Paster Commands
 -------------------------------
+
+Permission Error
+================
+
+If you receive 'Permission Denied' error, try running paster with sudo.
+
+.. parsed-literal::
+
+  sudo |virtualenv|/bin/paster db clean -c |production.ini|
 
 Virtualenv not activated, or not in ckan dir
 ============================================
@@ -231,13 +251,7 @@ Make sure that the datastore URLs are set properly before you run these commands
 
 Usage::
 
-    datastore set-permissions SQL_SUPER_USER
-
-    Where:
-        SQL_SUPER_USER is the name of a postgres user with sufficient
-                       permissions to create new tables, users, and grant
-                       and revoke new permissions.  Typically, this would
-                       be the "postgres" user.
+    datastore set-permissions  - shows a SQL script to execute
 
 
 .. _paster db:
@@ -471,7 +485,7 @@ won't clear the index before starting rebuilding it::
 
     paster --plugin=ckan search-index rebuild -r --config=/etc/ckan/std/std.ini
 
-There is also an option available which works like the refresh option but tries to use all processes on the 
+There is also an option available which works like the refresh option but tries to use all processes on the
 computer to reindex faster::
 
     paster --plugin=ckan search-index rebuild_fast --config=/etc/ckan/std/std.ini
