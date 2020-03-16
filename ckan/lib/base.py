@@ -189,11 +189,11 @@ def render(template_name, extra_vars=None, cache_key=None, cache_type=None,
     # Don't cache if we have set the __no_cache__ param in the query string.
     elif request.params.get('__no_cache__'):
         allow_cache = False
-    # Don't cache if we have extra vars containing data. Currently causing nothing to cache, removing
-    # elif extra_vars:
-    #     for k, v in extra_vars.iteritems():
-    #         allow_cache = False
-    #         break
+    # Don't cache if we have extra vars containing data.
+    elif extra_vars:
+        for k, v in extra_vars.iteritems():
+            allow_cache = False
+            break
     # Record cachability for the page cache if enabled
     request.environ['CKAN_PAGE_CACHABLE'] = allow_cache
 
