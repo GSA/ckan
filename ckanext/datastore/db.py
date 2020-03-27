@@ -139,7 +139,7 @@ def _cache_types(context):
             return _cache_types(context)
 
         psycopg2.extras.register_composite('nested',
-                                           connection.connection,
+                                           connection.connection.connection,
                                            True)
 
 
