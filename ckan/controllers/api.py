@@ -83,7 +83,7 @@ class ApiController(base.BaseController):
         if response_data is not None:
             response.headers['Content-Type'] = CONTENT_TYPES[content_type]
             if content_type == 'json':
-                response_msg = h.json.dumps(response_data)
+                response_msg = h.json.dumps(response_data, default=lambda o: "<<non-serializable: {}>>".format(type(o)))
             else:
                 response_msg = response_data
             # Support "JSONP" callback.
