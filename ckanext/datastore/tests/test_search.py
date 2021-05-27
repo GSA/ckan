@@ -779,6 +779,11 @@ class TestDatastoreSQL(DatastoreLegacyTestBase):
 
     @classmethod
     def setup_class(cls):
+        # Mock config for test. Save the state in order to restore afterward.
+        cls._original_config = dict(config)
+        config['ckan.datastore.sqlsearch.allowed_functions_file'] = \
+            '%(here)s/ckanext/datastore/tests/allowed_functions.txt'
+
         cls.app = helpers._get_test_app()
         super(TestDatastoreSQL, cls).setup_class()
         ctd.CreateTestData.create()
@@ -833,6 +838,14 @@ class TestDatastoreSQL(DatastoreLegacyTestBase):
 
         engine = db.get_write_engine()
         cls.Session = orm.scoped_session(orm.sessionmaker(bind=engine))
+
+    @classmethod
+    def teardown_class(cls):
+        super(TestDatastoreSQL, cls).teardown_class()
+
+        # Restore the config
+        config.clear()
+        config.update(cls._original_config)
 
     def test_validates_sql_has_a_single_statement(self):
         sql = 'SELECT * FROM public."{0}"; SELECT * FROM public."{0}";'.format(self.data['resource_id'])
