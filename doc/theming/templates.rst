@@ -24,7 +24,7 @@ an extension and plugin. For a detailed explanation of the steps below, see
 :doc:`/extensions/tutorial`.
 
 1. Use the ``ckan generate extension`` command as per the
-:doc:`/extensions/tutorial`. 
+:doc:`/extensions/tutorial`.
 
 2. Create the file |plugin.py| with the following contents:
 
@@ -47,13 +47,13 @@ an extension and plugin. For a detailed explanation of the steps below, see
 5. Add the plugin to the ``ckan.plugins`` setting in your |ckan.ini|
    file::
 
-    ckan.plugins = stats text_view recline_view example_theme
+    ckan.plugins = stats text_view datatables_view example_theme
 
 6. Start CKAN in the development web server:
 
    .. parsed-literal::
 
-    $ ckan -c |ckan.ini| run --reload
+    $ ckan -c |ckan.ini| run
     Starting server in PID 13961.
     serving on 0.0.0.0:5000 view at http://127.0.0.1:5000
 
@@ -190,14 +190,14 @@ inside the ``home`` directory:
              index.html  <-- An empty file.
 
 If you now restart the development web server (kill the server using Ctrl-c,
-then run the ``paster serve`` command again) and reload the `CKAN front page`_
+then run the ``ckan run`` command again) and reload the `CKAN front page`_
 in your web browser, you should see an empty page, because we've replaced the
 template file for the front page with an empty file.
 
 
 .. note::
 
-   If you run ``paster serve`` with the ``--reload`` option, then it isn't
+   If you run ``ckan run`` without the ``-r(--disable-reloader)`` option, then it isn't
    usually necessary to restart the server after editing a Python file,
    a template file, your CKAN config file, or any other CKAN file. If you've
    added a new file or directory, however, you need to restart the server
@@ -483,7 +483,7 @@ now implements :py:class:`~ckan.plugins.interfaces.ITemplateHelpers`:
 
 .. literalinclude:: /../ckanext/example_theme_docs/v08_custom_helper_function/plugin.py
    :start-after: # Declare that this plugin will implement ITemplateHelpers.
-   :end-before: def update_config(self, config):
+   :end-before: def update_config(self, config: CKANConfig):
 
 Finally, we implemented the
 :py:meth:`~ckan.plugins.interfaces.ITemplateHelpers.get_helpers` method from
