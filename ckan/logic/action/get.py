@@ -1060,10 +1060,10 @@ def package_show(context: Context, data_dict: DataDict) -> ActionResult.PackageS
         package_dict['tracking_summary'] = (
             model.TrackingSummary.get_for_package(package_dict['id']))
 
-        for resource_dict in package_dict['resources']:
-            summary =  model.TrackingSummary.get_for_resource(
-                resource_dict['url'])
-            resource_dict['tracking_summary'] = summary
+        # for resource_dict in package_dict['resources']:
+        #     summary =  model.TrackingSummary.get_for_resource(
+        #         resource_dict['url'])
+        #     resource_dict['tracking_summary'] = summary
 
     if context.get('for_view'):
         for item in plugins.PluginImplementations(plugins.IPackageController):
