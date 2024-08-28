@@ -475,7 +475,9 @@ class PackageSearchQuery(SearchQuery):
                     raise SearchQueryError('Invalid "sort" parameter')
 
                 if "Failed to connect to server" in e.args[0] or \
-                        "Connection to server" in e.args[0]:
+                        "Connection to server" in e.args[0] or \
+                        "Error 401 Bad credentials" in e.args[0] or \
+                        "503 Service Temporarily Unavailable" in e.args[0]:
                     log.warning("Connection Error: Failed to connect to Solr server.")
                     raise SolrConnectionError("Solr returned an error while searching.")
 
