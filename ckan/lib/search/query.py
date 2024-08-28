@@ -476,7 +476,16 @@ class PackageSearchQuery(SearchQuery):
 
                 if "Failed to connect to server" in e.args[0] or \
                         "Connection to server" in e.args[0]:
-                    log.warning("Connection Error: Failed to connect to Solr server.")
+                    log.error("Connection Error: Failed to connect to Solr server.")
+                    raise SolrConnectionError("Solr returned an error while searching.")
+
+                if "Error 401 Bad credentials" in e.args[0]:
+                    log.error("Connection Error: 401 Bad credentials.")
+                    raise SolrConnectionError("Solr returned an error while searching.")
+
+
+                if "503 Service Temporarily Unavailable" in e.args[0]:
+                    log.error("Connection Error: 503 Service Temporarily Unavailable.")
                     raise SolrConnectionError("Solr returned an error while searching.")
 
             raise SearchError('SOLR returned an error running query: %r Error: %r' %
