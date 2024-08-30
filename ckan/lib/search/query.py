@@ -469,8 +469,16 @@ class PackageSearchQuery(SearchQuery):
                         'Unknown sort order' in e.args[0]:
                     raise SearchQueryError('Invalid "sort" parameter')
 
-                if "Failed to connect to server" in e.args[0]:
-                    log.warning("Connection Error: Failed to connect to Solr server.")
+                if "Failed to connect to server" in e.args[0] or \
+                        "Connection to server" in e.args[0]:
+                    log.error("Connection Error: Failed to connect to Solr server.")
+                    raise SolrConnectionError("Solr returned an error while searching.")
+
+                if "(HTTP 504)" in e.args[0] or \
+                    "(HTTP 503)" in e.args[0] or \
+                    "(HTTP 502)" in e.args[0] or \
+                    "(HTTP 401)" in e.args[0]:
+                    log.error(f"Connection Error: {e.args[0]}")
                     raise SolrConnectionError("Solr returned an error while searching.")
 
             raise SearchError('SOLR returned an error running query: %r Error: %r' %
