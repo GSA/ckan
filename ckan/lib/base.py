@@ -197,6 +197,10 @@ def render(template_name, extra_vars=None, cache_key=None, cache_type=None,
     # Record cachability for the page cache if enabled
     request.environ['CKAN_PAGE_CACHABLE'] = allow_cache
 
+    print("request.environ <<<<<")
+    print(request.environ)
+    print(request.headers)
+    print(">>>> request.headers")
     if allow_cache:
         response.headers["Cache-Control"] = "public"
         try:
