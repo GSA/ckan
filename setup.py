@@ -19,6 +19,9 @@ for group, filepath in _extras_groups:
         extras_require[group] = f.readlines()
 
 setup(
+    name="ckan",
+    version="2.11.2",
+    description="datagov fork of CKAN",
     message_extractors={
         "ckan": [
             ("**.py", "python", None),
