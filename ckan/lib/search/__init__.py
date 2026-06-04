@@ -346,9 +346,9 @@ def check_solr_schema_version(schema_file: Optional[str]=None) -> bool:
             # Try Managed Schema
             res = _get_schema_from_solr(SOLR_SCHEMA_FILE_OFFSET_MANAGED)
             res.raise_for_status()
-        except requests.HTTPError:
-            # Fallback to Manually Edited schema.xml
-            res = _get_schema_from_solr(SOLR_SCHEMA_FILE_OFFSET_CLASSIC)
+        except requests.RequestException:
+            log.warn('Problems were found while retrieving the SOLR schema')
+            return False
         schema_content = res.text
     else:
         with open(schema_file, 'rb') as f:
