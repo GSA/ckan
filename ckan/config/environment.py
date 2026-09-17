@@ -175,8 +175,6 @@ def update_config() -> None:
     search.SolrSettings.init(config.get('solr_url'),
                              config.get('solr_user'),
                              config.get('solr_password'))
-    search.check_solr_schema_version()
-
     lib_plugins.reset_package_plugins()
     lib_plugins.register_package_plugins()
     lib_plugins.reset_group_plugins()
